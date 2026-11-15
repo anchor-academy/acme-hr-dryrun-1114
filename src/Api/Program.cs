@@ -15,6 +15,7 @@ builder.Services.AddDbContext<AcmeDb>(o =>
     else o.UseSqlite(builder.Configuration["SQLITE_PATH"] ?? "Data Source=acme-hr.db");
 });
 builder.Services.AddScoped<LeaveService>();
+builder.Services.AddSingleton<HolidayService>();
 builder.Services.AddAcmeAi(builder.Configuration);
 
 builder.Services.AddControllers().AddJsonOptions(o =>
@@ -38,6 +39,9 @@ using (var scope = app.Services.CreateScope())
 }
 
 app.UseCors();
+app.UseDefaultFiles();   // /app/ -> /app/index.html: on Render the web app is built into wwwroot/app (see src/Api/Dockerfile)
+app.UseStaticFiles();
+app.MapGet("/", () => Results.Redirect("/app/")).ExcludeFromDescription();
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseSwagger();

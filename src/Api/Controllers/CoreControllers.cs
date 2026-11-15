@@ -1,5 +1,6 @@
 using Api.Auth;
 using Api.Data;
+using Api.Models;
 using Api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -28,6 +29,9 @@ public class EmployeesController(AcmeDb db, LeaveService leave, AccessService ac
     public async Task<IActionResult> Get(int id) =>
         await db.Employees.FindAsync(id) is { } e ? Ok(e) : Problem(statusCode: 404, title: $"Employee {id} not found");
 
+    [HttpGet("{id:int}/summary")]
+    public async Task<IActionResult> Summary(int id) => Ok(new { employeeId = id, daysTakenThisYear = await leave.DaysTakenThisYearAsync(id) });
+
     [HttpGet("{id:int}/balance")]
     public async Task<IActionResult> Balance(int id)
     {
@@ -35,6 +39,8 @@ public class EmployeesController(AcmeDb db, LeaveService leave, AccessService ac
         return await leave.GetBalanceAsync(id) is { } b ? Ok(b) : Problem(statusCode: 404, title: $"Employee {id} not found");
     }
 }
+
+public record NewLeave(DateOnly StartDate, DateOnly EndDate, HalfDay HalfDay = HalfDay.None, string Reason = "");
 
 [ApiController, Route("leave")]
 public class LeaveController(LeaveService leave, AccessService access) : ControllerBase
@@ -51,9 +57,32 @@ public class LeaveController(LeaveService leave, AccessService access) : Control
         return Ok((await leave.ListAsync(null)).Where(r => visible is null || visible.Contains(r.EmployeeId)));
     }
 
-    // TODO (Lab 1): POST /leave, POST /leave/{id}/approve, POST /leave/{id}/reject
-    // The employee is the signed-in user (User.EmployeeId()), never an id from the body.
-    // Approve and reject only when access.CanDecideLeaveAsync(User, request) is true, otherwise 403.
+    /// <summary>Leave for the signed-in employee. The body has no employeeId: who asks comes from the token.</summary>
+    [HttpPost]
+    public Task<IActionResult> Create(NewLeave body) =>
+        Run(() => leave.CreateAsync(new CreateLeave(User.EmployeeId(), body.StartDate, body.EndDate, body.HalfDay, body.Reason)));
+
+    [HttpPost("{id:int}/approve")]
+    public Task<IActionResult> Approve(int id) => Decide(id, () => leave.ApproveAsync(id));
+
+    [HttpPost("{id:int}/reject")]
+    public Task<IActionResult> Reject(int id) => Decide(id, () => leave.RejectAsync(id));
+
+    /// <summary>Only the requester's manager or HR, never on their own request (AccessService).</summary>
+    async Task<IActionResult> Decide(int id, Func<Task<LeaveRequest>> action)
+    {
+        var request = await leave.FindAsync(id);
+        if (request is null) return Problem(statusCode: 404, title: $"Leave request {id} not found");
+        if (!await access.CanDecideLeaveAsync(User, request))
+            return Problem(statusCode: 403, title: "Only the employee's manager or HR can approve or reject this request");
+        return await Run(action);
+    }
+
+    async Task<IActionResult> Run(Func<Task<LeaveRequest>> action)
+    {
+        try { return Ok(await action()); }
+        catch (LeaveException e) { return Problem(statusCode: 400, title: "Leave request not valid", detail: e.Message); }
+    }
 }
 
 [ApiController, Route("policies")]
